@@ -2039,7 +2039,7 @@ function btnGhost() {
    Quran — reader, audio, memorization & recitation
    ========================================================================= */
 
-function QuranSection({ prefs, updatePrefs, day, updateDay, nightMode, setNightMode, quran, audio }) {
+function QuranSection({ prefs, updatePrefs, day, updateDay, nightMode, setNightMode, quran, audio, goTo }) {
   const [screen, setScreen] = useState("list"); // list | reader | reciters | memorize | search
   const [surahId, setSurahId] = useState(1);
   const [flip, setFlip] = useState(null); // 'next' | 'prev' | null
@@ -3345,6 +3345,11 @@ function QuranSection({ prefs, updatePrefs, day, updateDay, nightMode, setNightM
   return (
     <div>
       <SectionTitle right={<button onClick={() => setScreen("reciters")} style={btnGhost()}><ListMusic size={14} /> القارئ</button>}>القرآن</SectionTitle>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7, padding: 4, background: "var(--surfaceAlt)", borderRadius: 14, marginBottom: 14 }}>
+        <button onClick={() => {}} style={{ border: "none", borderRadius: 10, padding: "8px 6px", background: "var(--surface)", color: "var(--primary)", fontFamily: "'Cairo', sans-serif", fontSize: 11.5, fontWeight: 700, boxShadow: "0 1px 5px rgba(0,0,0,.06)" }}>📖 القرآن الكريم</button>
+        <button onClick={() => goTo?.("listen")} style={{ border: "none", borderRadius: 10, padding: "8px 6px", background: "transparent", color: "var(--textDim)", fontFamily: "'Cairo', sans-serif", fontSize: 11.5, fontWeight: 600, cursor: "pointer" }}>🎧 الاستماع والراديو</button>
+      </div>
 
       <button onClick={() => setScreen("search")} style={{ ...btnGhost(), width: "100%", justifyContent: "center", marginBottom: 14 }}>
         🔍 ابحثي عن كلمة أو آية في القرآن كله
@@ -5236,7 +5241,7 @@ function ZakatCalculator({ onClose }) {
   );
 }
 
-function Ibadah({ day, updateDay }) {
+function Ibadah({ day, updateDay, goTo }) {
   const [showZakat, setShowZakat] = useState(false);
   const toggleArr = (key, i) => {
     const arr = [...day[key]];
@@ -5250,13 +5255,33 @@ function Ibadah({ day, updateDay }) {
 
   const prayersDone = day.prayers.filter(Boolean).length;
   const sunnahDone = day.sunnah.filter(Boolean).length;
-  const totalTasks = PRAYERS.length + SUNNAH.length + 1 + 1; // صلوات + سنن + قيام (أي اختيار) + صدقة (أي اختيار)
-  const doneTasks = prayersDone + sunnahDone + (day.qiyam.length > 0 ? 1 : 0) + (day.charity.length > 0 ? 1 : 0);
+  const qiyamDone = (day.qiyam || []).length > 0;
+  const totalTasks = PRAYERS.length + SUNNAH.length + 1 + 1; // صلوات + سنن + قيام + صدقة
+  const doneTasks = prayersDone + sunnahDone + (qiyamDone ? 1 : 0) + (day.charity.length > 0 ? 1 : 0);
   const pct = day.excused ? dayCompletion(day) : Math.round((doneTasks / totalTasks) * 100);
 
   return (
     <div>
       <SectionTitle>عبادتي</SectionTitle>
+
+      {/* تنقّل واضح بين عباداتي والأذكار بدل إخفاء الأذكار في زر صغير */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+        <div style={{
+          border: "1px solid var(--accent)", background: "var(--accentSoft)", color: "var(--accent)",
+          borderRadius: 15, padding: "11px 12px", display: "flex", alignItems: "center", justifyContent: "center",
+          gap: 7, fontFamily: "'Cairo', sans-serif", fontSize: 12.5, fontWeight: 800, boxShadow: "0 5px 18px rgba(0,0,0,.04)"
+        }}>
+          🤲 عباداتي
+        </div>
+        <button onClick={() => goTo?.("adhkar")} style={{
+          border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)",
+          borderRadius: 15, padding: "11px 12px", display: "flex", alignItems: "center", justifyContent: "center",
+          gap: 7, fontFamily: "'Cairo', sans-serif", fontSize: 12.5, fontWeight: 800, cursor: "pointer",
+          transition: "all .2s ease"
+        }}>
+          📿 الأذكار
+        </button>
+      </div>
 
       {/* لوحة إنجاز اليوم — أول حاجة تشوفها تبقى مفيدة فورًا */}
       <Card className="anisk-stagger-1" style={{ padding: 22, marginBottom: 22, background: "linear-gradient(160deg, var(--surface), var(--accentSoft))" }}>
@@ -5288,27 +5313,115 @@ function Ibadah({ day, updateDay }) {
         </div>
       </Card>
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "0 2px 10px", opacity: day.excused ? 0.5 : 1 }}>
-        <span style={{ fontFamily: "'Cairo', sans-serif", fontSize: 14.5, color: "var(--text)", fontWeight: 700 }}>🕌 الصلوات المفروضة</span>
-        <span style={{ fontSize: 12.5, color: "var(--accent)", fontFamily: "'Cairo', sans-serif", fontWeight: 700 }}>{day.excused ? "غير واجبة اليوم" : `${prayersDone} / 5`}</span>
+      {/* لوحة الصلوات: 5 أعمدة ثابتة × 3 صفوف — فرض / سنة / جماعة.
+          التصميم يحافظ على كل البيانات الحالية لكن يعرضها في مساحة صغيرة ومرتبة بدل
+          ما كل صلاة تأخذ صفًا كاملًا. */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "0 2px 10px", opacity: day.excused ? 0.55 : 1 }}>
+        <div>
+          <div style={{ fontFamily: "'Cairo', sans-serif", fontSize: 14.5, color: "var(--text)", fontWeight: 700 }}>🕌 صلواتي اليوم</div>
+          <div style={{ fontSize: 10.5, color: "var(--textDim)", marginTop: 2 }}>فرض · سنة · جماعة</div>
+        </div>
+        <span style={{ fontSize: 12.5, color: "var(--accent)", fontFamily: "'Cairo', sans-serif", fontWeight: 700 }}>{day.excused ? "غير واجبة اليوم" : `${prayersDone} / 5 فرض`}</span>
       </div>
       {day.excused ? (
-        <Card style={{ padding: 18, textAlign: "center" }}>
+        <Card style={{ padding: 18, textAlign: "center", marginBottom: 14 }}>
           <p style={{ fontSize: 12.5, color: "var(--textDim)", margin: 0 }}>لا قضاء للصلاة، اطمئني 🤍</p>
         </Card>
       ) : (
-        <Card style={{ overflow: "hidden" }}>{PRAYERS.map((p, i) => <CheckRow key={p} label={p} checked={day.prayers[i]} onToggle={() => toggleArr("prayers", i)} last={i === PRAYERS.length - 1} />)}</Card>
+        <Card style={{ padding: 10, marginBottom: 14, overflow: "hidden" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "46px repeat(5, minmax(0, 1fr))", gap: 5, direction: "rtl" }}>
+            <div />
+            {PRAYERS.map((p, i) => {
+              const Icon = PRAYER_TIME_ICONS[i];
+              return (
+                <div key={p} style={{ minWidth: 0, textAlign: "center", padding: "7px 2px 8px", borderRadius: 11, background: "var(--surfaceAlt)" }}>
+                  <Icon size={15} color="var(--accent)" style={{ marginBottom: 3 }} />
+                  <div style={{ fontFamily: "'Cairo', sans-serif", fontSize: 10.5, fontWeight: 700, color: "var(--text)", whiteSpace: "nowrap" }}>{p}</div>
+                </div>
+              );
+            })}
+
+            {[["فرض", "prayers"], ["سنة", "sunnah"], ["جماعة", "jamaah"]].map(([rowLabel, key]) => (
+              <React.Fragment key={key}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Cairo', sans-serif", fontSize: 9.5, fontWeight: 700, color: "var(--textDim)", padding: "6px 0" }}>{rowLabel}</div>
+                {PRAYERS.map((p, i) => {
+                  const hasSunnah = key !== "sunnah" || PRAYER_SUNNAH_LINKS[i].length > 0;
+                  const isSunnah = key === "sunnah";
+                  const done = key === "jamaah" ? !!(day.jamaah || [])[i] : !!day[key][i];
+                  const toggle = () => {
+                    if (isSunnah) {
+                      const links = PRAYER_SUNNAH_LINKS[i];
+                      if (!links.length) return;
+                      const next = [...day.sunnah];
+                      if (links.length === 1) next[links[0].sunnahIndex] = !next[links[0].sunnahIndex];
+                      else next[links[0].sunnahIndex] = !next[links[0].sunnahIndex];
+                      updateDay({ sunnah: next });
+                    } else {
+                      toggleArr(key, i);
+                    }
+                  };
+                  const sunnahLinks = isSunnah ? PRAYER_SUNNAH_LINKS[i] : [];
+                  const sunnahDoneCount = sunnahLinks.filter((x) => !!day.sunnah[x.sunnahIndex]).length;
+
+                  if (isSunnah) {
+                    return (
+                      <div key={`${key}-${p}`} style={{
+                        minWidth: 0, minHeight: 43, borderRadius: 11, border: `1px solid ${sunnahDoneCount > 0 ? "var(--accent)" : "var(--border)"}`,
+                        background: sunnahDoneCount > 0 ? "var(--accentSoft)" : "var(--surface)", display: "flex", alignItems: "center", justifyContent: "center",
+                        gap: 3, padding: 4, opacity: hasSunnah ? 1 : 0.55,
+                      }}>
+                        {sunnahLinks.length === 0 ? (
+                          <span style={{ fontSize: 11, color: "var(--border)" }}>—</span>
+                        ) : (
+                          sunnahLinks.map((link) => {
+                            const linkDone = !!day.sunnah[link.sunnahIndex];
+                            const short = link.label.includes("قبل") ? "ق" : "ب";
+                            return (
+                              <button
+                                key={link.sunnahIndex}
+                                title={link.label}
+                                onClick={() => {
+                                  const next = [...day.sunnah];
+                                  next[link.sunnahIndex] = !next[link.sunnahIndex];
+                                  updateDay({ sunnah: next });
+                                }}
+                                style={{
+                                  width: 25, height: 30, borderRadius: 8, border: `1px solid ${linkDone ? "var(--accent)" : "var(--border)"}`,
+                                  background: linkDone ? "var(--accent)" : "var(--surfaceAlt)", color: linkDone ? "var(--onPrimary)" : "var(--textDim)",
+                                  cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 0, padding: 0,
+                                  fontFamily: "'Cairo', sans-serif", fontSize: 8.5, fontWeight: 800,
+                                }}
+                              >
+                                <span style={{ fontSize: 10 }}>{linkDone ? "✓" : short}</span>
+                                <span style={{ fontSize: 6.5, opacity: .85 }}>{short === "ق" ? "قبل" : "بعد"}</span>
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <button key={`${key}-${p}`} onClick={toggle} disabled={!hasSunnah} style={{
+                      minWidth: 0, minHeight: 43, borderRadius: 11, border: `1px solid ${done ? "var(--accent)" : "var(--border)"}`,
+                      background: done ? "var(--accentSoft)" : "var(--surface)", color: done ? "var(--accent)" : hasSunnah ? "var(--textDim)" : "var(--border)",
+                      cursor: hasSunnah ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center",
+                      fontFamily: "'Cairo', sans-serif", padding: 3, position: "relative", opacity: hasSunnah ? 1 : 0.55,
+                    }}>
+                      {done ? <CheckCircle2 size={17} /> : <span style={{ width: 9, height: 9, borderRadius: "50%", border: "1.5px solid currentColor" }} />}
+                    </button>
+                  );
+                })}
+              </React.Fragment>
+            ))}
+          </div>
+          <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--border)", fontSize: 9.5, color: "var(--textDim)", textAlign: "center", fontFamily: "'Cairo', sans-serif" }}>
+            اضغطي على الخانة لتسجيلها · سنة الظهر تشمل قبل/بعد الظهر
+          </div>
+        </Card>
       )}
 
-      {!day.excused && (
-        <>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "26px 2px 10px" }}>
-            <span style={{ fontFamily: "'Cairo', sans-serif", fontSize: 14.5, color: "var(--text)", fontWeight: 700 }}>🕌 صلاة الجماعة</span>
-            <span style={{ fontSize: 12.5, color: "var(--accent)", fontFamily: "'Cairo', sans-serif", fontWeight: 700 }}>{(day.jamaah || []).filter(Boolean).length} / 5</span>
-          </div>
-          <Card style={{ overflow: "hidden" }}>{PRAYERS.map((p, i) => <CheckRow key={p} label={p} checked={!!(day.jamaah || [])[i]} onToggle={() => toggleArr("jamaah", i)} last={i === PRAYERS.length - 1} />)}</Card>
-        </>
-      )}
 
       {gregorianToHijri(new Date()).month === 9 && (
         <>
@@ -5372,28 +5485,61 @@ function Ibadah({ day, updateDay }) {
         );
       })()}
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "26px 2px 10px", opacity: day.excused ? 0.5 : 1 }}>
-        <span style={{ fontFamily: "'Cairo', sans-serif", fontSize: 14.5, color: "var(--text)", fontWeight: 700 }}>✨ السنن الرواتب</span>
-        <span style={{ fontSize: 12.5, color: "var(--accent)", fontFamily: "'Cairo', sans-serif", fontWeight: 700 }}>{sunnahDone} / {SUNNAH.length}</span>
+      {/* نوافل إضافية — لوحة صغيرة موحّدة بدل بطاقات طويلة */}
+      <div style={{ margin: "22px 2px 10px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div>
+          <div style={{ fontFamily: "'Cairo', sans-serif", fontSize: 14.5, color: "var(--text)", fontWeight: 800 }}>🌙 نوافلي الإضافية</div>
+          <div style={{ fontSize: 10.5, color: "var(--textDim)", marginTop: 2 }}>قيام الليل والضحى</div>
+        </div>
+        <span style={{ fontSize: 10.5, color: "var(--textDim)" }}>اختاري ما أنجزتِه</span>
       </div>
-      <Card style={{ overflow: "hidden" }}>{SUNNAH.map((p, i) => <CheckRow key={p} label={p} checked={day.sunnah[i]} onToggle={() => toggleArr("sunnah", i)} last={i === SUNNAH.length - 1} />)}</Card>
 
-      <div style={{ margin: "26px 2px 10px" }}>
-        <span style={{ fontFamily: "'Cairo', sans-serif", fontSize: 14.5, color: "var(--text)", fontWeight: 700 }}>🌙 قيام الليل</span>
-      </div>
-      <Card style={{ padding: "6px 16px", overflow: "hidden" }}>
-        {QIYAM_OPTIONS.map((o, i) => (
-          <CheckRow key={o} label={o} checked={day.qiyam.includes(o)} onToggle={() => toggleMulti("qiyam", o)} last={i === QIYAM_OPTIONS.length - 1} />
-        ))}
-      </Card>
-      <p style={{ fontSize: 12, color: "var(--textDim)", margin: "8px 4px", fontFamily: "'Cairo', sans-serif" }}>ولو ركعتين — لا بأس بالقليل المستمر 🤍</p>
+      <Card style={{ padding: 10, overflow: "hidden" }}>
+        <div style={{
+          display: "grid", gridTemplateColumns: "62px repeat(4, minmax(0, 1fr))", gap: 6, direction: "rtl", alignItems: "stretch"
+        }}>
+          <div />
+          {[
+            ["🕌", "صلاة"],
+            ["📿", "استغفار"],
+            ["🤲", "دعاء"],
+            ["📖", "تلاوة قرآن"],
+          ].map(([icon, label]) => (
+            <div key={label} style={{ textAlign: "center", padding: "7px 2px", borderRadius: 10, background: "var(--surfaceAlt)", border: "1px solid var(--border)" }}>
+              <div style={{ fontSize: 14, lineHeight: 1.1 }}>{icon}</div>
+              <div style={{ fontFamily: "'Cairo', sans-serif", fontSize: 8.5, fontWeight: 800, color: "var(--text)", marginTop: 4, whiteSpace: "nowrap" }}>{label}</div>
+            </div>
+          ))}
 
-      <div style={{ margin: "26px 2px 10px" }}>
-        <span style={{ fontFamily: "'Cairo', sans-serif", fontSize: 14.5, color: "var(--text)", fontWeight: 700 }}>☀️ صلاة الضحى</span>
-      </div>
-      <Card style={{ overflow: "hidden" }}>
-        <CheckRow label="صلّيت الضحى اليوم" checked={!!day.duha} onToggle={() => updateDay({ duha: !day.duha })} last />
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: 4, borderRadius: 10, background: "var(--surfaceAlt)", fontFamily: "'Cairo', sans-serif", fontSize: 9.5, fontWeight: 800, color: "var(--textDim)" }}>قيام الليل</div>
+          {["صلاة", "استغفار", "دعاء", "تلاوة القرآن"].map((o) => {
+            const done = (day.qiyam || []).includes(o);
+            return (
+              <button key={o} onClick={() => toggleMulti("qiyam", o)} aria-label={`قيام الليل: ${o}`} style={{
+                minHeight: 44, borderRadius: 11, border: `1px solid ${done ? "var(--accent)" : "var(--border)"}`,
+                background: done ? "var(--accentSoft)" : "var(--surface)", color: done ? "var(--accent)" : "var(--textDim)",
+                cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", transition: "all .2s ease", padding: 3
+              }}>
+                {done ? <CheckCircle2 size={17} /> : <span style={{ width: 10, height: 10, borderRadius: "50%", border: "1.5px solid currentColor" }} />}
+              </button>
+            );
+          })}
+
+          <div style={{ gridColumn: "1 / -1", height: 1, background: "var(--border)", margin: "2px 0" }} />
+
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: 4, borderRadius: 10, background: "var(--surfaceAlt)", fontFamily: "'Cairo', sans-serif", fontSize: 9.5, fontWeight: 800, color: "var(--textDim)" }}>☀️ الضحى</div>
+          <button onClick={() => updateDay({ duha: !day.duha })} style={{
+            gridColumn: "2 / -1", minHeight: 44, borderRadius: 11, border: `1px solid ${day.duha ? "var(--accent)" : "var(--border)"}`,
+            background: day.duha ? "var(--accentSoft)" : "var(--surface)", color: day.duha ? "var(--accent)" : "var(--textDim)",
+            cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 12px",
+            fontFamily: "'Cairo', sans-serif", fontSize: 11, fontWeight: 800
+          }}>
+            <span>{day.duha ? "تم تسجيل صلاة الضحى اليوم" : "تسجيل صلاة الضحى"}</span>
+            {day.duha ? <CheckCircle2 size={17} /> : <span style={{ width: 10, height: 10, borderRadius: "50%", border: "1.5px solid currentColor" }} />}
+          </button>
+        </div>
       </Card>
+      <p style={{ fontSize: 11, color: "var(--textDim)", margin: "7px 4px", fontFamily: "'Cairo', sans-serif" }}>ولو ركعتين — لا بأس بالقليل المستمر 🤍</p>
 
       <div style={{ margin: "26px 2px 10px" }}>
         <span style={{ fontFamily: "'Cairo', sans-serif", fontSize: 14.5, color: "var(--text)", fontWeight: 700 }}>🤲 صدقة في يومي</span>
@@ -6371,7 +6517,7 @@ function HajjUmrahScreen({ onBack }) {
   );
 }
 
-function LearnSection({ day, updateDay }) {
+function LearnSection({ day, updateDay, goTo }) {
   const [seerahOpen, setSeerahOpen] = useState(false);
   const [pillarsOpen, setPillarsOpen] = useState(false);
   const [hajjOpen, setHajjOpen] = useState(false);
@@ -6380,7 +6526,12 @@ function LearnSection({ day, updateDay }) {
   if (hajjOpen) return <HajjUmrahScreen onBack={() => setHajjOpen(false)} />;
   return (
     <div>
-      <SectionTitle>🌿 فَذَكِّرْ إِنْ نَفَعَتِ الذِّكْرَى</SectionTitle>
+      <SectionTitle right={<button onClick={() => goTo?.("ai")} style={{ ...btnGhost(), fontSize: 11.5 }}><Sparkles size={14} /> اسأل أنيسك AI</button>}>🌿 فَذَكِّرْ إِنْ نَفَعَتِ الذِّكْرَى</SectionTitle>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+        <button onClick={() => goTo?.("hadith")} style={{ border: "1px solid var(--border)", background: "var(--surface)", borderRadius: 13, padding: "10px 8px", cursor: "pointer", color: "var(--text)", fontFamily: "'Cairo', sans-serif", fontSize: 11.5, fontWeight: 700 }}>📚 الأحاديث</button>
+        <button onClick={() => goTo?.("ai")} style={{ border: "1px solid var(--border)", background: "var(--surface)", borderRadius: 13, padding: "10px 8px", cursor: "pointer", color: "var(--text)", fontFamily: "'Cairo', sans-serif", fontSize: 11.5, fontWeight: 700 }}>🤖 اسأل أنيسك AI</button>
+      </div>
 
       <Card onClick={() => setSeerahOpen(true)} style={{ padding: 18, marginBottom: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 14, background: "linear-gradient(135deg, var(--accentSoft), transparent)" }}>
         <div style={{ width: 44, height: 44, borderRadius: 12, background: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -7528,39 +7679,45 @@ function useTr(lang) {
 }
 
 const NAV_ITEMS = [
-  { id: "home", labelKey: "home", icon: HomeIcon },
-  { id: "quran", labelKey: "quran", icon: BookOpen },
-  { id: "listen", labelKey: "listen", icon: Music },
-  { id: "prayerTimes", labelKey: "prayerTimes", icon: Clock },
-  { id: "ibadah", labelKey: "ibadah", icon: Compass },
-  { id: "adhkar", labelKey: "adhkar", icon: Star },
-  { id: "learn", labelKey: "learn", icon: GraduationCap },
+  { id: "quran", labelKey: "quran", icon: BookOpen, views: ["quran", "listen"] },
+  { id: "prayerTimes", labelKey: "prayerTimes", icon: Clock, views: ["prayerTimes"] },
+  { id: "ibadah", labelKey: "ibadah", icon: Compass, views: ["ibadah", "adhkar"] },
+  { id: "learn", labelKey: "learn", icon: GraduationCap, views: ["learn", "hadith", "ai"] },
+  { id: "journey", labelKey: "journey", icon: Target, views: ["journey"] },
+  { id: "settings", labelKey: "settings", icon: SettingsIcon, views: ["settings"] },
 ];
 const SIDEBAR_EXTRA = [
+  { id: "home", labelKey: "home", icon: HomeIcon },
+  { id: "listen", labelKey: "listen", icon: Music },
+  { id: "adhkar", labelKey: "adhkar", icon: Star },
   { id: "ai", labelKey: "ai", icon: Sparkles },
   { id: "hadith", labelKey: "hadith", icon: BookMarked },
-  { id: "journey", labelKey: "journey", icon: Target },
-  { id: "settings", labelKey: "settings", icon: SettingsIcon },
 ];
 
 function BottomNav({ view, setView, tr }) {
+  const activeGroup = NAV_ITEMS.find((item) => item.views.includes(view))?.id;
   return (
-    <div style={{ position: "fixed", bottom: 0, insetInlineStart: 0, insetInlineEnd: 0, zIndex: 50, maxWidth: 480, margin: "0 auto" }}>
+    <div style={{ position: "fixed", bottom: 0, insetInlineStart: 0, insetInlineEnd: 0, zIndex: 50, maxWidth: 480, margin: "0 auto", padding: "0 8px env(safe-area-inset-bottom)" }}>
       <div style={{
-        display: "flex", background: "var(--surface)", borderTop: "1px solid var(--border)",
-        padding: "10px 4px calc(10px + env(safe-area-inset-bottom))", boxShadow: "0 -6px 20px rgba(0,0,0,0.04)",
+        display: "flex", alignItems: "stretch", background: "var(--surface)", border: "1px solid var(--border)",
+        borderBottom: "none", borderRadius: "20px 20px 0 0", padding: "7px 4px 5px",
+        boxShadow: "0 -8px 28px rgba(0,0,0,0.08)", gap: 2,
       }}>
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon;
-          const active = view === item.id;
+          const active = activeGroup === item.id;
           return (
             <button key={item.id} onClick={() => setView(item.id)} style={{
-              flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "4px 0", minWidth: 0,
-              border: "none", background: "transparent", cursor: "pointer", color: active ? "var(--primary)" : "var(--textDim)",
-              transform: active ? "translateY(-2px)" : "none", transition: "all .2s",
+              flex: 1, minWidth: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+              gap: 3, padding: "7px 2px 6px", border: "none", borderRadius: 14, cursor: "pointer",
+              background: active ? "var(--accentSoft)" : "transparent",
+              color: active ? "var(--primary)" : "var(--textDim)",
+              transform: active ? "translateY(-1px)" : "none", transition: "all .2s",
             }}>
-              <Icon size={19} strokeWidth={active ? 2.3 : 1.8} />
-              <span style={{ fontSize: 9.5, fontFamily: "'Cairo', sans-serif", fontWeight: active ? 700 : 500, whiteSpace: "nowrap" }}>{tr(item.labelKey)}</span>
+              <span style={{ width: 32, height: 28, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", background: active ? "var(--surface)" : "transparent", boxShadow: active ? "0 2px 8px rgba(0,0,0,.06)" : "none" }}>
+                <Icon size={19} strokeWidth={active ? 2.35 : 1.8} />
+              </span>
+              <span style={{ fontSize: 9.5, lineHeight: 1.2, fontFamily: "'Cairo', sans-serif", fontWeight: active ? 700 : 500, whiteSpace: "nowrap" }}>{tr(item.labelKey)}</span>
             </button>
           );
         })}
@@ -8377,13 +8534,13 @@ export default function App() {
   const renderView = () => {
     switch (view) {
       case "home": return <Home state={state} day={day} updateDay={updateDay} prefs={state.prefs} updatePrefs={updatePrefs} goTo={setView} streak={state.streak} welcome={welcome} theme={resolved} reminders={reminders} />;
-      case "quran": return <QuranSection prefs={state.prefs} updatePrefs={updatePrefs} day={day} updateDay={updateDay} nightMode={nightMode} setNightMode={setNightMode} quran={quran} audio={audio} />;
+      case "quran": return <QuranSection prefs={state.prefs} updatePrefs={updatePrefs} day={day} updateDay={updateDay} nightMode={nightMode} setNightMode={setNightMode} quran={quran} audio={audio} goTo={setView} />;
       case "listen": return <ListenHub quran={quran} prefs={state.prefs} updatePrefs={updatePrefs} />;
       case "prayerTimes": return <PrayerTimesView prefs={state.prefs} updatePrefs={updatePrefs} reminders={reminders} tr={tr} />;
-      case "ibadah": return <Ibadah day={day} updateDay={updateDay} />;
+      case "ibadah": return <Ibadah day={day} updateDay={updateDay} goTo={setView} />;
       case "adhkar": return <AdhkarSection day={day} updateDay={updateDay} prefs={state.prefs} />;
       case "hadith": return <HadithLibrary onBack={() => setView("home")} />;
-      case "learn": return <LearnSection day={day} updateDay={updateDay} />;
+      case "learn": return <LearnSection day={day} updateDay={updateDay} goTo={setView} />;
       case "journey": return <Journey state={state} updateState={updateState} />;
       case "ai": return <AnisqAI />;
       case "settings": return <SettingsSection state={state} updateState={updateState} prefs={state.prefs} updatePrefs={updatePrefs} themeMode={themeModeState} setThemeMode={setThemeModeState} resolvedTheme={resolved} reminders={reminders} tr={tr} />;
@@ -8428,7 +8585,7 @@ export default function App() {
       <div className="unisk-mobile-topbar" style={{
         alignItems: "center", justifyContent: "space-between", padding: "14px 18px 0", maxWidth: 480, margin: "0 auto",
       }}>
-        <span style={{ fontFamily: "'Reem Kufi', sans-serif", fontSize: 18, color: "var(--primary)" }}>{tr("appName")}</span>
+        <button onClick={() => setView("home")} style={{ border: "none", background: "transparent", padding: 0, cursor: "pointer", fontFamily: "'Reem Kufi', sans-serif", fontSize: 18, color: "var(--primary)" }}>{tr("appName")}</button>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={() => setView("journey")} style={iconBtn()}><Target size={17} color={view === "journey" ? "var(--primary)" : "var(--textDim)"} /></button>
           <button onClick={() => setView("settings")} style={iconBtn()}><SettingsIcon size={17} color={view === "settings" ? "var(--primary)" : "var(--textDim)"} /></button>
