@@ -459,30 +459,39 @@ function generateVerseCard(verse) {
     ctx.lineTo(W - 150, footerY - 55);
     ctx.stroke();
 
-    const logoR = 26;
-    const logoX = W - 140, logoY = footerY;
-    const logoGrad = ctx.createLinearGradient(logoX - logoR, logoY - logoR, logoX + logoR, logoY + logoR);
-    logoGrad.addColorStop(0, "#3E5B41");
-    logoGrad.addColorStop(1, "#B08D57");
-    ctx.beginPath();
-    ctx.arc(logoX, logoY, logoR, 0, Math.PI * 2);
-    ctx.fillStyle = logoGrad;
-    ctx.fill();
-    ctx.fillStyle = "#FFFFFF";
-    ctx.font = '700 30px Amiri, serif';
-    ctx.textAlign = "center";
-    ctx.direction = "rtl";
-    ctx.fillText("ا", logoX, logoY + 11);
+    // استخدمي أيقونة Anisk الحقيقية من public بدل رسم حرف "ا" يدويًا،
+    // عشان الصورة المشتركة تحمل نفس هوية التطبيق بالضبط.
+    const logoSize = 64;
+    const logoX = W - 148, logoY = footerY - 2;
+    const logoImg = new Image();
+    logoImg.onload = () => {
+      ctx.save();
+      roundRectPath(logoX - logoSize / 2, logoY - logoSize / 2, logoSize, logoSize, 14);
+      ctx.clip();
+      ctx.drawImage(logoImg, logoX - logoSize / 2, logoY - logoSize / 2, logoSize, logoSize);
+      ctx.restore();
 
-    ctx.textAlign = "right";
-    ctx.fillStyle = ink;
-    ctx.font = '700 26px Cairo, sans-serif';
-    ctx.fillText("أنيسك", logoX - 44, logoY - 2);
-    ctx.font = '400 18px Cairo, sans-serif';
-    ctx.fillStyle = "#6B5A3D";
-    ctx.fillText("Anisk | رفيقك في طريقك إلى الله", logoX - 44, logoY + 22);
-
-    canvas.toBlob((blob) => resolve(blob), "image/png");
+      ctx.textAlign = "right";
+      ctx.fillStyle = ink;
+      ctx.font = '700 26px Cairo, sans-serif';
+      ctx.fillText("أنيسك", logoX - 46, logoY - 4);
+      ctx.font = '400 18px Cairo, sans-serif';
+      ctx.fillStyle = "#6B5A3D";
+      ctx.fillText("Anisk | رفيقك في طريقك إلى الله", logoX - 46, logoY + 20);
+      canvas.toBlob((blob) => resolve(blob), "image/png");
+    };
+    logoImg.onerror = () => {
+      // fallback آمن لو الأيقونة لم تُحمّل لأي سبب.
+      ctx.textAlign = "right";
+      ctx.fillStyle = ink;
+      ctx.font = '700 26px Cairo, sans-serif';
+      ctx.fillText("أنيسك", logoX - 46, logoY - 4);
+      ctx.font = '400 18px Cairo, sans-serif';
+      ctx.fillStyle = "#6B5A3D";
+      ctx.fillText("Anisk | رفيقك في طريقك إلى الله", logoX - 46, logoY + 20);
+      canvas.toBlob((blob) => resolve(blob), "image/png");
+    };
+    logoImg.src = "/icon-512.png";
   });
 }
 
@@ -3629,54 +3638,200 @@ async function getOfflineSurahUrl(reciterId, surahId) {
 
 const LISTEN_SPEEDS = [0.75, 0.9, 1, 1.1, 1.25, 1.5];
 
+// مشغلات الاستماع والراديو معمولة مرة واحدة على مستوى التطبيق كله، مش داخل
+// ListenHub. كده لما المستخدمة تنتقل بين التبويبات، المكوّن ممكن يتفك ويتركب
+// من جديد لكن الصوت نفسه يفضل شغال.
+const ANISK_LISTEN_AUDIO = typeof Audio !== "undefined" ? new Audio() : null;
+const ANISK_RADIO_AUDIO = typeof Audio !== "undefined" ? new Audio() : null;
+if (ANISK_RADIO_AUDIO) ANISK_RADIO_AUDIO.referrerPolicy = "no-referrer";
+
+const ANISK_LISTEN_SESSION = {
+  playingSurah: null,
+  status: "idle",
+  queue: null,
+  speed: 1,
+  ruqyahIndex: null,
+  radioPlaying: false,
+  radioStatus: "idle",
+  radioSource: "primary",
+};
+
+const PLAYLISTS_STORAGE_KEY = "anisk-listen-playlists-v1";
+
+function loadListenPlaylistsSync() {
+  try {
+    const raw = localStorage.getItem(PLAYLISTS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length) return parsed;
+    }
+  } catch {}
+  return [
+    { id: "sleep", name: "قبل النوم", ids: [] },
+    { id: "memorize", name: "الحفظ", ids: [] },
+  ];
+}
+
+function saveListenPlaylistsSync(playlists) {
+  try { localStorage.setItem(PLAYLISTS_STORAGE_KEY, JSON.stringify(playlists)); } catch {}
+}
+
 function ListenHub({ quran, prefs, updatePrefs }) {
   const [reciterId, setReciterId] = useState(prefs.reciter);
-  const [playingSurah, setPlayingSurah] = useState(null); // surah id currently playing/loading
-  const [status, setStatus] = useState("idle"); // idle | loading | playing | paused | error
+  const [playingSurah, setPlayingSurah] = useState(ANISK_LISTEN_SESSION.playingSurah);
+  const [status, setStatus] = useState(ANISK_LISTEN_SESSION.status); // idle | loading | playing | paused | error
   const [errorMsg, setErrorMsg] = useState("");
   const [search, setSearch] = useState("");
-  const [ruqyahIndex, setRuqyahIndex] = useState(null); // null = not playing ruqyah; else index into RUQYAH_SEQUENCE flat list
-  const [radioPlaying, setRadioPlaying] = useState(false);
-  const [radioStatus, setRadioStatus] = useState("idle"); // idle | loading | playing | error | offline
-  const [radioSource, setRadioSource] = useState("primary"); // "primary" (القاهرة) | "fallback" (السعودية)
-  const [queue, setQueue] = useState(null); // { ids: [surahId,...], index } — تشغيل متسلسل لعدة سور
-  const [speed, setSpeed] = useState(1); // سرعة التشغيل: مشغّل الاستماع العائم
+  const [ruqyahIndex, setRuqyahIndex] = useState(ANISK_LISTEN_SESSION.ruqyahIndex);
+  const [radioPlaying, setRadioPlaying] = useState(ANISK_LISTEN_SESSION.radioPlaying);
+  const [radioStatus, setRadioStatus] = useState(ANISK_LISTEN_SESSION.radioStatus); // idle | loading | playing | error | offline
+  const [radioSource, setRadioSource] = useState(ANISK_LISTEN_SESSION.radioSource); // "primary" | "fallback"
+  const [queue, setQueue] = useState(ANISK_LISTEN_SESSION.queue);
+  const [speed, setSpeed] = useState(ANISK_LISTEN_SESSION.speed || 1);
   const [rangeFrom, setRangeFrom] = useState(null);
   const [rangeTo, setRangeTo] = useState(null);
   const [playerExpanded, setPlayerExpanded] = useState(false);
   const [playerMode, setPlayerMode] = useState("range"); // "range" | "custom"
-  const [downloadedKeys, setDownloadedKeys] = useState(new Set()); // `${reciterId}::${surahId}` المحمّلة للاستماع بدون نت
+  const [downloadedKeys, setDownloadedKeys] = useState(new Set());
   const [downloadingKey, setDownloadingKey] = useState(null);
-  const [customList, setCustomList] = useState([]); // مصفوفة من IDs بترتيب اختياره هي، مش بالضرورة تسلسلي
+  const [playlists, setPlaylists] = useState(loadListenPlaylistsSync);
+  const [activePlaylistId, setActivePlaylistId] = useState(() => loadListenPlaylistsSync()[0]?.id || null);
+  const [newPlaylistName, setNewPlaylistName] = useState("");
   const [customSearch, setCustomSearch] = useState("");
-  const radioRef = useRef(null);
-  const audioRef = useRef(null);
+  const [draggedPlaylistIndex, setDraggedPlaylistIndex] = useState(null);
+  const radioRef = useRef(ANISK_RADIO_AUDIO);
+  const audioRef = useRef(ANISK_LISTEN_AUDIO);
   const ruqyahListRef = useRef(buildRuqyahGlobalList());
   // مرايا (refs) لتفادي مشكلة الـ stale closure جوه onEnded، اللي بيتسجَّل مرة واحدة
   // بس عند تركيب المكوّن (mount) — من غيرها onEnded هيفضل شايف القيم القديمة بس
   const ruqyahIndexRef = useRef(null);
   const queueRef = useRef(null);
   const loadAndPlaySurahRef = useRef(null);
-  useEffect(() => { ruqyahIndexRef.current = ruqyahIndex; }, [ruqyahIndex]);
-  useEffect(() => { queueRef.current = queue; }, [queue]);
-  useEffect(() => { if (audioRef.current && status !== "idle") audioRef.current.playbackRate = speed; }, [speed]); // eslint-disable-line
+  useEffect(() => { ruqyahIndexRef.current = ruqyahIndex; ANISK_LISTEN_SESSION.ruqyahIndex = ruqyahIndex; }, [ruqyahIndex]);
+  useEffect(() => { queueRef.current = queue; ANISK_LISTEN_SESSION.queue = queue; }, [queue]);
+  useEffect(() => { ANISK_LISTEN_SESSION.speed = speed; if (audioRef.current && status !== "idle") audioRef.current.playbackRate = speed; }, [speed, status]); // eslint-disable-line
+  useEffect(() => { saveListenPlaylistsSync(playlists); }, [playlists]);
+
+  const activePlaylist = playlists.find((p) => p.id === activePlaylistId) || playlists[0] || null;
+  const customList = activePlaylist?.ids || [];
+
+  const addPlaylist = () => {
+    const name = newPlaylistName.trim();
+    if (!name) return;
+    const id = `playlist-${Date.now()}`;
+    setPlaylists((prev) => [...prev, { id, name, ids: [] }]);
+    setActivePlaylistId(id);
+    setNewPlaylistName("");
+  };
+  const renameActivePlaylist = () => {
+    if (!activePlaylist) return;
+    const name = window.prompt("اسم القائمة الجديدة:", activePlaylist.name);
+    if (!name?.trim()) return;
+    setPlaylists((prev) => prev.map((p) => p.id === activePlaylist.id ? { ...p, name: name.trim() } : p));
+  };
+  const deleteActivePlaylist = () => {
+    if (!activePlaylist || playlists.length <= 1) return;
+    if (!window.confirm(`حذف قائمة «${activePlaylist.name}»؟`)) return;
+    const next = playlists.filter((p) => p.id !== activePlaylist.id);
+    setPlaylists(next);
+    setActivePlaylistId(next[0]?.id || null);
+  };
+  const updateActivePlaylistIds = (ids) => {
+    if (!activePlaylist) return;
+    setPlaylists((prev) => prev.map((p) => p.id === activePlaylist.id ? { ...p, ids } : p));
+  };
+  const addToActivePlaylist = (id) => {
+    if (!activePlaylist || activePlaylist.ids.includes(id)) return;
+    updateActivePlaylistIds([...activePlaylist.ids, id]);
+  };
+  const removeFromActivePlaylist = (index) => {
+    if (!activePlaylist) return;
+    updateActivePlaylistIds(activePlaylist.ids.filter((_, i) => i !== index));
+  };
+  const movePlaylistItem = (from, to) => {
+    if (!activePlaylist || from === to || to < 0 || to >= activePlaylist.ids.length) return;
+    const ids = [...activePlaylist.ids];
+    const [item] = ids.splice(from, 1);
+    ids.splice(to, 0, item);
+    updateActivePlaylistIds(ids);
+  };
 
   useEffect(() => {
-    const el = new Audio();
-    // بعض أنظمة حماية البث بتفحص الـ Referer المرسل مع الطلب وبترفض الدومينات
-    // غير المعروفة (زي *.vercel.app)، لكن غالبًا بتسمح للطلبات اللي مالهاش
-    // Referer خالص (زي لما حد يكتب الرابط مباشرة). نجرّب نلغي الـ Referer تمامًا
-    // عشان نتفادى الحظر المبني على الدومين تحديدًا.
-    el.referrerPolicy = "no-referrer";
-    radioRef.current = el;
-    const onPlay = () => setRadioStatus("playing");
-    const onError = () => { setRadioStatus("error"); setRadioPlaying(false); };
+    const el = radioRef.current;
+    if (!el) return;
+    const onPlay = () => { setRadioStatus("playing"); setRadioPlaying(true); ANISK_LISTEN_SESSION.radioStatus = "playing"; ANISK_LISTEN_SESSION.radioPlaying = true; };
+    const onPause = () => { setRadioPlaying(false); ANISK_LISTEN_SESSION.radioPlaying = false; };
+    const onError = () => { setRadioStatus("error"); setRadioPlaying(false); ANISK_LISTEN_SESSION.radioStatus = "error"; ANISK_LISTEN_SESSION.radioPlaying = false; };
     el.addEventListener("play", onPlay);
+    el.addEventListener("pause", onPause);
     el.addEventListener("error", onError);
-    return () => { el.removeEventListener("play", onPlay); el.removeEventListener("error", onError); el.pause(); };
+    return () => { el.removeEventListener("play", onPlay); el.removeEventListener("pause", onPause); el.removeEventListener("error", onError); };
   }, []);
 
-  // إذاعة القرآن الكريم من القاهرة (٩٣.١ FM) هي الأولوية دايمًا — نفس البث المُستخدم
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el) return;
+    const onPlay = () => { setStatus("playing"); ANISK_LISTEN_SESSION.status = "playing"; };
+    const onPause = () => {
+      if (!el.ended) { setStatus("paused"); ANISK_LISTEN_SESSION.status = "paused"; }
+    };
+    const onEnded = () => {
+      if (ruqyahIndexRef.current != null) {
+        const list = ruqyahListRef.current;
+        const next = ruqyahIndexRef.current + 1;
+        if (next >= list.length) { setStatus("idle"); setRuqyahIndex(null); ANISK_LISTEN_SESSION.status = "idle"; }
+        else setRuqyahIndex(next);
+        return;
+      }
+      const q = queueRef.current;
+      if (q) {
+        const nextIdx = q.index + 1;
+        if (nextIdx >= q.ids.length) { setStatus("idle"); setPlayingSurah(null); setQueue(null); ANISK_LISTEN_SESSION.status = "idle"; ANISK_LISTEN_SESSION.playingSurah = null; return; }
+        const nextId = q.ids[nextIdx];
+        setQueue({ ...q, index: nextIdx });
+        setPlayingSurah(nextId);
+        ANISK_LISTEN_SESSION.playingSurah = nextId;
+        loadAndPlaySurahRef.current?.(nextId);
+        return;
+      }
+      setStatus("idle"); setPlayingSurah(null); ANISK_LISTEN_SESSION.status = "idle"; ANISK_LISTEN_SESSION.playingSurah = null;
+    };
+    const onError = () => { setStatus("error"); setErrorMsg("تعذّر تحميل الصوت — تحقّق من الاتصال بالإنترنت."); ANISK_LISTEN_SESSION.status = "error"; };
+    el.addEventListener("play", onPlay);
+    el.addEventListener("pause", onPause);
+    el.addEventListener("ended", onEnded);
+    el.addEventListener("error", onError);
+    return () => {
+      el.removeEventListener("play", onPlay);
+      el.removeEventListener("pause", onPause);
+      el.removeEventListener("ended", onEnded);
+      el.removeEventListener("error", onError);
+      // مهم: لا نوقف الصوت هنا. الانتقال بين التبويبات يفك المكوّن فقط.
+    };
+  }, []);
+
+  // مزامنة الواجهة عند الرجوع لتبويب الاستماع إذا كان الصوت لسه شغالًا.
+  useEffect(() => {
+    if (ANISK_LISTEN_SESSION.playingSurah != null) {
+      setPlayingSurah(ANISK_LISTEN_SESSION.playingSurah);
+      setStatus(ANISK_LISTEN_SESSION.status || (audioRef.current?.paused ? "paused" : "playing"));
+    }
+    setQueue(ANISK_LISTEN_SESSION.queue);
+    setSpeed(ANISK_LISTEN_SESSION.speed || 1);
+    setRuqyahIndex(ANISK_LISTEN_SESSION.ruqyahIndex);
+    setRadioPlaying(ANISK_LISTEN_SESSION.radioPlaying);
+    setRadioStatus(ANISK_LISTEN_SESSION.radioStatus);
+    setRadioSource(ANISK_LISTEN_SESSION.radioSource);
+  }, []);
+
+  // مشغلات الاستماع والراديو مشتركة على مستوى التطبيق؛ لا يتم إنشاء Audio جديد
+  // ولا إيقافه عند unmount.
+  useEffect(() => {
+    const el = radioRef.current;
+    if (el) el.referrerPolicy = "no-referrer";
+  }, []);
+
+    // إذاعة القرآن الكريم من القاهرة (٩٣.١ FM) هي الأولوية دايمًا — نفس البث المُستخدم
   // فعليًا وعلنًا في مواقع إذاعة قرآنية معروفة تانية (زي e-quran.com)، يعني مش رابط
   // خاص أو مقيّد بدومين معيّن. لو تعطّل لأي سبب، بيتحول تلقائيًا لإذاعة القرآن
   // الكريم السعودية كاحتياطي (مصدرها الرسمي عبر mp3quran.net).
@@ -3689,7 +3844,7 @@ function ListenHub({ quran, prefs, updatePrefs }) {
   const RADIO_FALLBACK = "https://backup.qurango.net/radio/mix";
 
   const toggleRadio = (forceSource) => {
-    if (radioPlaying && !forceSource) { radioRef.current.pause(); setRadioPlaying(false); setRadioStatus("idle"); return; }
+    if (radioPlaying && !forceSource) { radioRef.current.pause(); setRadioPlaying(false); setRadioStatus("idle"); ANISK_LISTEN_SESSION.radioPlaying = false; ANISK_LISTEN_SESSION.radioStatus = "idle"; return; }
     if (typeof navigator !== "undefined" && navigator.onLine === false) {
       setRadioStatus("offline");
       return;
@@ -3698,6 +3853,8 @@ function ListenHub({ quran, prefs, updatePrefs }) {
     radioRef.current?.pause();
     setRadioStatus("loading");
     setRadioPlaying(false);
+    ANISK_LISTEN_SESSION.radioStatus = "loading";
+    ANISK_LISTEN_SESSION.radioPlaying = false;
 
     const el = radioRef.current;
     let settled = false;
@@ -3710,6 +3867,7 @@ function ListenHub({ quran, prefs, updatePrefs }) {
     // مهلة قصوى لو الصوت ما بدأش فعليًا خلال ٦ ثواني.
     const tryUrl = (url, isFallback) => {
       setRadioSource(isFallback ? "fallback" : "primary");
+      ANISK_LISTEN_SESSION.radioSource = isFallback ? "fallback" : "primary";
       el.onerror = null;
       const onPlaying = () => {
         if (settled) return;
@@ -3718,6 +3876,8 @@ function ListenHub({ quran, prefs, updatePrefs }) {
         el.removeEventListener("playing", onPlaying);
         setRadioPlaying(true);
         setRadioStatus("idle");
+        ANISK_LISTEN_SESSION.radioPlaying = true;
+        ANISK_LISTEN_SESSION.radioStatus = "playing";
       };
       el.addEventListener("playing", onPlaying);
       el.src = url;
@@ -3726,7 +3886,7 @@ function ListenHub({ quran, prefs, updatePrefs }) {
         clearTimeout(timer);
         el.removeEventListener("playing", onPlaying);
         if (!isFallback && !forceSource) { settled = false; tryUrl(RADIO_FALLBACK, true); }
-        else { settled = true; setRadioStatus("error"); setRadioPlaying(false); }
+        else { settled = true; setRadioStatus("error"); setRadioPlaying(false); ANISK_LISTEN_SESSION.radioStatus = "error"; ANISK_LISTEN_SESSION.radioPlaying = false; }
       });
       if (!isFallback && !forceSource) {
         timer = setTimeout(() => {
@@ -3853,6 +4013,8 @@ function ListenHub({ quran, prefs, updatePrefs }) {
   const loadAndPlaySurah = async (surahId) => {
     setPlayingSurah(surahId);
     setStatus("loading");
+    ANISK_LISTEN_SESSION.playingSurah = surahId;
+    ANISK_LISTEN_SESSION.status = "loading";
     // لو السورة محمّلة مسبقًا للاستماع بدون نت، نشغّلها من النسخة المحلية المخزّنة
     // فورًا — من غير أي طلب شبكة خالص، فتشتغل حتى لو الإنترنت مقطوع تمامًا.
     const offlineUrl = await getOfflineSurahUrl(reciter.id, surahId);
@@ -3894,6 +4056,7 @@ function ListenHub({ quran, prefs, updatePrefs }) {
     setErrorMsg("");
     setRuqyahIndex(null);
     setQueue(null); // النقر المباشر على سورة بيلغي أي قائمة استماع متسلسلة كانت شغالة
+    ANISK_LISTEN_SESSION.queue = null;
     radioRef.current?.pause(); setRadioPlaying(false); // إيقاف الإذاعة المباشرة لو شغالة
     if (!reciter?.edition && !reciter?.mp3q && !reciter?.archiveBase) { setStatus("error"); setErrorMsg("لا يتوفر صوت لهذا القارئ حاليًا — جرّب قارئًا آخر."); return; }
     if (playingSurah === surahId) {
@@ -3931,6 +4094,7 @@ function ListenHub({ quran, prefs, updatePrefs }) {
     setRuqyahIndex(null);
     radioRef.current?.pause(); setRadioPlaying(false);
     setQueue({ ids: rangeIds, index: 0 });
+    ANISK_LISTEN_SESSION.queue = { ids: rangeIds, index: 0 };
     loadAndPlaySurah(rangeIds[0]);
   };
 
@@ -3940,6 +4104,7 @@ function ListenHub({ quran, prefs, updatePrefs }) {
     setRuqyahIndex(null);
     radioRef.current?.pause(); setRadioPlaying(false);
     setQueue({ ids: customList, index: 0 });
+    ANISK_LISTEN_SESSION.queue = { ids: customList, index: 0 };
     loadAndPlaySurah(customList[0]);
   };
 
@@ -4069,11 +4234,34 @@ function ListenHub({ quran, prefs, updatePrefs }) {
               </div>
             ) : (
               <div style={{ marginBottom: 10 }}>
+                <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                  <select
+                    value={activePlaylistId || ""}
+                    onChange={(e) => setActivePlaylistId(e.target.value)}
+                    style={{ ...inputStyle(), flex: 1, fontSize: 12, padding: "7px 8px" }}
+                  >
+                    {playlists.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.ids.length})</option>)}
+                  </select>
+                  <button onClick={renameActivePlaylist} title="تعديل اسم القائمة" style={{ ...iconBtn(), width: 34, height: 34 }}>✏️</button>
+                  <button onClick={deleteActivePlaylist} disabled={playlists.length <= 1} title="حذف القائمة" style={{ ...iconBtn(), width: 34, height: 34, opacity: playlists.length <= 1 ? 0.4 : 1 }}>🗑️</button>
+                </div>
+
+                <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+                  <input
+                    value={newPlaylistName}
+                    onChange={(e) => setNewPlaylistName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") addPlaylist(); }}
+                    placeholder="اسم قائمة جديدة: قبل النوم، الحفظ..."
+                    style={{ ...inputStyle(), flex: 1, fontSize: 12, padding: "7px 10px" }}
+                  />
+                  <button onClick={addPlaylist} disabled={!newPlaylistName.trim()} style={{ ...btnPrimarySmall(), padding: "7px 12px", opacity: newPlaylistName.trim() ? 1 : 0.5 }}>+ قائمة</button>
+                </div>
+
                 <div style={{ position: "relative", marginBottom: 8 }}>
                   <input
                     value={customSearch}
                     onChange={(e) => setCustomSearch(e.target.value)}
-                    placeholder="ابحثي عن سورة عشان تضيفيها..."
+                    placeholder={activePlaylist ? `أضيفي سورة إلى «${activePlaylist.name}»...` : "ابحثي عن سورة عشان تضيفيها..."}
                     style={{ ...inputStyle(), width: "100%", fontSize: 12.5, padding: "8px 10px" }}
                   />
                   {customSearch.trim() && (
@@ -4085,11 +4273,11 @@ function ListenHub({ quran, prefs, updatePrefs }) {
                       {scopedList.filter((s) => s.name.includes(customSearch.trim())).slice(0, 8).map((s) => (
                         <div
                           key={s.id}
-                          onClick={() => { setCustomList((list) => [...list, s.id]); setCustomSearch(""); }}
+                          onClick={() => { addToActivePlaylist(s.id); setCustomSearch(""); }}
                           style={{ padding: "8px 10px", cursor: "pointer", fontSize: 12.5, fontFamily: "'Cairo', sans-serif", color: "var(--text)", display: "flex", justifyContent: "space-between", alignItems: "center" }}
                         >
                           <span>{s.name}</span>
-                          <span style={{ color: "var(--primary)", fontSize: 16 }}>+</span>
+                          <span style={{ color: activePlaylist?.ids.includes(s.id) ? "var(--textDim)" : "var(--primary)", fontSize: 16 }}>{activePlaylist?.ids.includes(s.id) ? "✓" : "+"}</span>
                         </div>
                       ))}
                       {scopedList.filter((s) => s.name.includes(customSearch.trim())).length === 0 && (
@@ -4099,29 +4287,40 @@ function ListenHub({ quran, prefs, updatePrefs }) {
                   )}
                 </div>
 
-                {customList.length > 0 ? (
+                {activePlaylist?.ids.length ? (
                   <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
-                    {customList.map((id, idx) => {
+                    {activePlaylist.ids.map((id, idx) => {
                       const s = quran.list.find((x) => x.id === id);
                       return (
-                        <div key={idx} style={{ display: "flex", alignItems: "center", gap: 8, background: "var(--surfaceAlt)", borderRadius: 10, padding: "6px 10px" }}>
-                          <span style={{ fontSize: 11, color: "var(--textDim)", fontFamily: "'Cairo', sans-serif", width: 16 }}>{idx + 1}</span>
+                        <div
+                          key={`${id}-${idx}`}
+                          draggable
+                          onDragStart={() => setDraggedPlaylistIndex(idx)}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={(e) => { e.preventDefault(); if (draggedPlaylistIndex != null) movePlaylistItem(draggedPlaylistIndex, idx); setDraggedPlaylistIndex(null); }}
+                          onDragEnd={() => setDraggedPlaylistIndex(null)}
+                          style={{ display: "flex", alignItems: "center", gap: 7, background: "var(--surfaceAlt)", borderRadius: 10, padding: "6px 8px", cursor: "grab", opacity: draggedPlaylistIndex === idx ? 0.55 : 1 }}
+                        >
+                          <span style={{ fontSize: 11, color: "var(--textDim)", width: 18, textAlign: "center" }}>☷</span>
+                          <span style={{ fontSize: 11, color: "var(--textDim)", width: 16 }}>{idx + 1}</span>
                           <span style={{ flex: 1, fontSize: 12.5, color: "var(--text)", fontFamily: "'Cairo', sans-serif" }}>{s?.name || id}</span>
-                          <X size={13} color="var(--textDim)" style={{ cursor: "pointer" }} onClick={() => setCustomList((list) => list.filter((_, i) => i !== idx))} />
+                          <button onClick={() => movePlaylistItem(idx, idx - 1)} disabled={idx === 0} title="تحريك لأعلى" style={{ ...iconBtn(), width: 26, height: 26, opacity: idx === 0 ? 0.3 : 1 }}>↑</button>
+                          <button onClick={() => movePlaylistItem(idx, idx + 1)} disabled={idx === activePlaylist.ids.length - 1} title="تحريك لأسفل" style={{ ...iconBtn(), width: 26, height: 26, opacity: idx === activePlaylist.ids.length - 1 ? 0.3 : 1 }}>↓</button>
+                          <button onClick={() => removeFromActivePlaylist(idx)} title="حذف من القائمة" style={{ ...iconBtn(), width: 26, height: 26 }}>×</button>
                         </div>
                       );
                     })}
                   </div>
                 ) : (
                   <div style={{ fontSize: 11.5, color: "var(--textDim)", fontFamily: "'Cairo', sans-serif", textAlign: "center", padding: "8px 0" }}>
-                    ابحثي وأضيفي السور اللي عاوزة تسمعيها، بأي ترتيب، وهتتشغّل واحدة ورا التانية بالترتيب ده بالظبط.
+                    أضيفي السور بالبحث، وبعدها تقدري تغيّري ترتيبها بالسحب أو بأسهم ↑ ↓.
                   </div>
                 )}
 
                 <div style={{ display: "flex", gap: 8 }}>
-                  <button onClick={startCustomQueue} disabled={!customList.length} style={{ ...btnPrimarySmall(), flex: 1, opacity: customList.length ? 1 : 0.5 }}>▶️ تشغيل القائمة</button>
+                  <button onClick={startCustomQueue} disabled={!customList.length} style={{ ...btnPrimarySmall(), flex: 1, opacity: customList.length ? 1 : 0.5 }}>▶️ تشغيل «{activePlaylist?.name || "القائمة"}»</button>
                   {customList.length > 0 && (
-                    <button onClick={() => setCustomList([])} style={{ ...btnGhost(), padding: "8px 12px" }}>مسح الكل</button>
+                    <button onClick={() => updateActivePlaylistIds([])} style={{ ...btnGhost(), padding: "8px 12px" }}>مسح السور</button>
                   )}
                 </div>
               </div>
